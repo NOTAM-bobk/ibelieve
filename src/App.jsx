@@ -13,6 +13,7 @@ import {
   User,
   Loader2,
   RefreshCw,
+  Shuffle,
 } from 'lucide-react';
 import AccountView from './AccountView.jsx';
 import CategoriesView from './CategoriesView.jsx';
@@ -21,17 +22,23 @@ import { QUOTE_SOURCES, sourceById } from './quoteSources.js';
 let idCounter = 1;
 const nextId = () => idCounter++;
 
-async function fetchBatch(count, existingTexts, sourceId) {
-  const source = sourceById(sourceId);
+const DEFAULT_SOURCE_ID = QUOTE_SOURCES[0].id;
+
+async function fetchBatch(count, existingTexts, sourceIds) {
+  const pool = sourceIds && sourceIds.length ? sourceIds : [DEFAULT_SOURCE_ID];
   const seen = new Set(existingTexts);
   const results = await Promise.allSettled(
-    Array.from({ length: count }, () => source.fetchOne())
+    Array.from({ length: count }, () => {
+      const pickedId = pool[Math.floor(Math.random() * pool.length)];
+      const source = sourceById(pickedId);
+      return source.fetchOne().then((text) => ({ text, sourceId: pickedId }));
+    })
   );
   const fresh = [];
   for (const r of results) {
-    if (r.status === 'fulfilled' && r.value && !seen.has(r.value)) {
-      seen.add(r.value);
-      fresh.push({ id: nextId(), text: r.value, sourceId: source.id });
+    if (r.status === 'fulfilled' && r.value?.text && !seen.has(r.value.text)) {
+      seen.add(r.value.text);
+      fresh.push({ id: nextId(), text: r.value.text, sourceId: r.value.sourceId });
     }
   }
   return fresh;
@@ -46,6 +53,7 @@ const STORAGE_KEYS = {
   saved: 'ibelieve.saved.v1',
   viewed: 'ibelieve.viewed.v1',
   visits: 'ibelieve.visits.v1',
+  sources: 'ibelieve.sources.v1',
 };
 
 function loadSet(key) {
@@ -130,16 +138,16 @@ function TopBar({ onOpenAccount }) {
   return (
     <div className="fixed top-0 left-0 right-0 z-30 pt-safe pointer-events-none">
       <div className="flex items-center justify-between px-5 pt-4">
-        <div className="flex items-center gap-1.5 bg-white/40 backdrop-blur-md px-3 py-1.5 rounded-full pointer-events-auto">
-          <Sparkles size={14} className="text-neutral-700" />
-          <span className="text-xs font-bold text-neutral-800">ibelieve</span>
+        <div className="flex items-center gap-1.5 bg-white/15 backdrop-blur-md px-3 py-1.5 rounded-full pointer-events-auto">
+          <Sparkles size={14} className="text-white" />
+          <span className="text-xs font-bold text-white">ibelieve</span>
         </div>
         <button
           onClick={onOpenAccount}
-          className="w-11 h-11 rounded-2xl bg-white/40 backdrop-blur-md flex items-center justify-center shadow-sm active:scale-90 transition-transform pointer-events-auto"
+          className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-md flex items-center justify-center active:scale-90 transition-transform pointer-events-auto"
           aria-label="Open account"
         >
-          <User size={20} className="text-neutral-800" />
+          <User size={18} className="text-white" />
         </button>
       </div>
     </div>
@@ -147,7 +155,8 @@ function TopBar({ onOpenAccount }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Feed Card — now a squarer tile centered on each snap section         */
+/* Feed Card — full-screen, editorial: serif quote, left-aligned,      */
+/* oversized quotation mark, minimal outlined action buttons            */
 /* ------------------------------------------------------------------ */
 
 function FeedCard({ quote, isLiked, isSaved, onLike, onSave, onShare, registerRef, isLast }) {
@@ -176,68 +185,77 @@ function FeedCard({ quote, isLiked, isSaved, onLike, onSave, onShare, registerRe
     <section
       ref={cardRef}
       data-id={quote.id}
-      className="relative h-[100dvh] w-full snap-start snap-always flex items-center justify-center bg-neutral-100 px-5"
+      className={`relative h-[100dvh] w-full snap-start snap-always flex flex-col justify-center overflow-hidden bg-gradient-to-br ${source.gradient}`}
     >
-      <div
-        className={`relative w-full max-w-sm aspect-square rounded-[40px] shadow-xl overflow-hidden flex flex-col items-center justify-center p-8 bg-gradient-to-br ${source.gradient}`}
+      {/* depth vignette so white text and icons always read clearly */}
+      <div className="absolute inset-0 bg-gradient-to-b from-black/25 via-transparent to-black/35 pointer-events-none" />
+
+      {/* oversized decorative quotation mark, editorial texture rather than a flat gradient */}
+      <span
+        aria-hidden="true"
+        className="absolute -top-10 left-2 text-white/10 select-none pointer-events-none leading-none"
+        style={{ fontFamily: 'Fraunces, serif', fontSize: '15rem' }}
       >
-        {/* decorative soft blobs */}
-        <div className="absolute -top-16 -left-12 w-56 h-56 bg-white/30 rounded-full blur-3xl" />
-        <div className="absolute -bottom-16 -right-8 w-56 h-56 bg-white/20 rounded-full blur-3xl" />
+        &ldquo;
+      </span>
 
-        {/* category chip */}
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 animate-float-in">
-          <span
-            className={`${source.chip} text-white text-xs font-bold px-4 py-1.5 rounded-full shadow-md flex items-center gap-1.5`}
+      {/* category label, top-left, small tracked caption instead of a pill badge */}
+      <div className="absolute top-24 left-6 flex items-center gap-2 animate-float-in">
+        <span className="text-base">{source.emoji}</span>
+        <span className={`text-[11px] font-bold tracking-[0.22em] uppercase ${source.accent}`}>
+          {source.name}
+        </span>
+      </div>
+      <div className={`absolute top-[7.5rem] left-6 w-8 h-[3px] rounded-full ${source.chip} animate-float-in`} />
+
+      {/* main quote — serif, left-aligned, generous leading */}
+      <div key={quote.id} className="relative z-10 px-6 sm:px-10 max-w-xl animate-float-in">
+        <p
+          style={{ fontFamily: 'Fraunces, serif' }}
+          className="text-[2rem] sm:text-4xl font-medium leading-[1.2] tracking-tight text-white"
+        >
+          {quote.text}
+        </p>
+      </div>
+
+      {/* minimal outlined action buttons, no labels, tucked bottom-right */}
+      <div className="absolute right-5 bottom-32 flex flex-col items-center gap-3.5 z-10">
+        <button onClick={handleLike} className="active:scale-90 transition-transform duration-200">
+          <div
+            className={`w-11 h-11 rounded-full border flex items-center justify-center backdrop-blur-sm transition-colors duration-200 ${
+              isLiked ? 'bg-white/90 border-white' : 'bg-white/10 border-white/30'
+            } ${heartPop ? 'animate-pop' : ''}`}
           >
-            <span>{source.emoji}</span>
-            {source.name}
-          </span>
-        </div>
+            <Heart
+              size={18}
+              className={isLiked ? `${source.accentText} fill-current` : 'text-white'}
+              strokeWidth={2}
+            />
+          </div>
+        </button>
 
-        {/* main text */}
-        <div key={quote.id} className="relative px-4 text-center animate-float-in">
-          <p className={`text-2xl sm:text-3xl font-bold leading-snug ${source.text}`}>
-            {quote.text}
-          </p>
-        </div>
+        <button onClick={handleSave} className="active:scale-90 transition-transform duration-200">
+          <div
+            className={`w-11 h-11 rounded-full border flex items-center justify-center backdrop-blur-sm transition-colors duration-200 ${
+              isSaved ? 'bg-white/90 border-white' : 'bg-white/10 border-white/30'
+            } ${saveBounce ? 'animate-pop' : ''}`}
+          >
+            <Bookmark
+              size={16}
+              className={isSaved ? `${source.accentText} fill-current` : 'text-white'}
+              strokeWidth={2}
+            />
+          </div>
+        </button>
 
-        {/* floating action buttons — tucked inside the card, clear of the text */}
-        <div className="absolute right-4 bottom-4 flex flex-col items-center gap-3">
-          <button onClick={handleLike} className="flex flex-col items-center gap-1 group">
-            <div
-              className={`w-10 h-10 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md transition-all duration-200 active:scale-90 ${
-                isLiked ? 'bg-rose-500' : 'bg-white/40 group-hover:bg-white/60'
-              } ${heartPop ? 'animate-pop' : ''}`}
-            >
-              <Heart
-                size={18}
-                className={isLiked ? 'text-white fill-white' : source.text}
-                strokeWidth={2.2}
-              />
-            </div>
-          </button>
-
-          <button onClick={handleSave} className="flex flex-col items-center gap-1 group">
-            <div
-              className={`w-10 h-10 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md transition-all duration-200 active:scale-90 ${
-                isSaved ? 'bg-indigo-500' : 'bg-white/40 group-hover:bg-white/60'
-              } ${saveBounce ? 'animate-pop' : ''}`}
-            >
-              <Bookmark
-                size={16}
-                className={isSaved ? 'text-white fill-white' : source.text}
-                strokeWidth={2.2}
-              />
-            </div>
-          </button>
-
-          <button onClick={() => onShare(quote.text)} className="flex flex-col items-center gap-1 group">
-            <div className="w-10 h-10 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md bg-white/40 group-hover:bg-white/60 transition-all duration-200 active:scale-90">
-              <Share2 size={16} className={source.text} strokeWidth={2.2} />
-            </div>
-          </button>
-        </div>
+        <button
+          onClick={() => onShare(quote.text)}
+          className="active:scale-90 transition-transform duration-200"
+        >
+          <div className="w-11 h-11 rounded-full border border-white/30 bg-white/10 backdrop-blur-sm flex items-center justify-center">
+            <Share2 size={16} className="text-white" strokeWidth={2} />
+          </div>
+        </button>
       </div>
     </section>
   );
@@ -249,9 +267,9 @@ function FeedCard({ quote, isLiked, isSaved, onLike, onSave, onShare, registerRe
 
 function FeedLoading() {
   return (
-    <div className="h-[100dvh] flex flex-col items-center justify-center bg-gradient-to-br from-violet-100 via-purple-50 to-fuchsia-100 px-8 text-center gap-4">
-      <Loader2 size={34} className="text-violet-500 animate-spin-slow" />
-      <p className="text-violet-900/70 font-semibold">Fetching fresh quotes…</p>
+    <div className="h-[100dvh] flex flex-col items-center justify-center bg-gradient-to-br from-[#3b0764] via-[#5b21b6] to-[#7c3aed] px-8 text-center gap-4">
+      <Loader2 size={30} className="text-white animate-spin-slow" />
+      <p className="text-white/80 font-semibold">Fetching fresh quotes…</p>
     </div>
   );
 }
@@ -287,8 +305,8 @@ function FeedView({
   onShare,
   onViewed,
   onReachEnd,
-  activeSourceId,
-  onResetToDefault,
+  selectedCount,
+  onOpenCategories,
 }) {
   const cardRefs = useRef(new Map());
 
@@ -328,16 +346,14 @@ function FeedView({
     return () => endObserver.disconnect();
   }, [quotes, onReachEnd]);
 
-  const isDefault = activeSourceId === QUOTE_SOURCES[0].id;
-
   return (
     <div className="relative h-[100dvh] w-full">
-      {!isDefault && (
+      {selectedCount > 1 && (
         <button
-          onClick={onResetToDefault}
-          className="absolute top-20 left-4 z-20 flex items-center gap-1.5 bg-white/70 backdrop-blur-md text-neutral-800 text-xs font-bold pl-2 pr-3 py-1.5 rounded-full shadow-md active:scale-95 transition-transform"
+          onClick={onOpenCategories}
+          className="absolute top-24 right-5 z-20 flex items-center gap-1.5 bg-white/15 backdrop-blur-md text-white text-xs font-bold pl-2.5 pr-3 py-1.5 rounded-full active:scale-95 transition-transform"
         >
-          <X size={14} /> Back to {QUOTE_SOURCES[0].name}
+          <Shuffle size={13} /> {selectedCount} mixed
         </button>
       )}
       <div className="h-full w-full overflow-y-scroll snap-y snap-mandatory">
@@ -444,7 +460,8 @@ function InsightsView({ viewedCount, likedCount, savedCount, streak, sourceBreak
 }
 
 /* ------------------------------------------------------------------ */
-/* Bottom Navigation — Material 3 Expressive styling                    */
+/* Bottom Navigation — tight, small icons, active tab = round pill      */
+/* (Google Play Store style)                                            */
 /* ------------------------------------------------------------------ */
 
 function BottomNav({ activeTab, setActiveTab }) {
@@ -455,41 +472,36 @@ function BottomNav({ activeTab, setActiveTab }) {
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 pb-safe">
-      <div className="bg-white rounded-t-[32px] shadow-[0_-10px_30px_rgba(0,0,0,0.08)] px-4 pt-4 pb-3 flex items-center justify-around">
+    <nav className="fixed bottom-0 inset-x-0 z-40 pb-safe">
+      <div className="bg-white/95 backdrop-blur-xl border-t border-neutral-100 px-2 pt-2 pb-1.5 flex items-center justify-around">
         {items.map(({ id, label, icon: Icon }) => {
           const active = activeTab === id;
           return (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
-              className="relative flex flex-col items-center gap-1.5 px-4"
+              className="flex flex-col items-center gap-0.5 px-3 py-1"
             >
               <div
-                className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 ${
-                  active ? 'bg-violet-100 scale-105' : 'bg-transparent'
+                className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 ${
+                  active ? 'bg-violet-100' : 'bg-transparent'
                 }`}
               >
                 <Icon
-                  size={22}
-                  strokeWidth={2.3}
+                  size={18}
+                  strokeWidth={2.4}
                   className={`transition-colors duration-300 ${
                     active ? 'text-violet-700' : 'text-neutral-400'
                   }`}
                 />
               </div>
               <span
-                className={`text-xs font-bold transition-colors duration-300 ${
+                className={`text-[10px] font-bold transition-colors duration-300 ${
                   active ? 'text-neutral-900' : 'text-neutral-400'
                 }`}
               >
                 {label}
               </span>
-              <span
-                className={`absolute -bottom-3 h-[3px] rounded-full bg-neutral-900 transition-all duration-300 ${
-                  active ? 'w-7 opacity-100' : 'w-0 opacity-0'
-                }`}
-              />
             </button>
           );
         })}
@@ -504,11 +516,12 @@ function BottomNav({ activeTab, setActiveTab }) {
 
 const INITIAL_BATCH = 10;
 const LOAD_MORE_BATCH = 6;
-const DEFAULT_SOURCE_ID = QUOTE_SOURCES[0].id;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('feed');
-  const [activeSourceId, setActiveSourceId] = useState(DEFAULT_SOURCE_ID);
+  const [selectedSourceIds, setSelectedSourceIds] = useState(() =>
+    loadJSON(STORAGE_KEYS.sources, [DEFAULT_SOURCE_ID])
+  );
   const [quotes, setQuotes] = useState([]);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [loadingMore, setLoadingMore] = useState(false);
@@ -521,6 +534,7 @@ export default function App() {
   const [toast, setToast] = useState({ show: false, message: '' });
 
   const loadingMoreRef = useRef(false);
+  const sourceKey = selectedSourceIds.slice().sort().join(',');
 
   useEffect(() => {
     const visits = loadJSON(STORAGE_KEYS.visits, []);
@@ -533,12 +547,13 @@ export default function App() {
   useEffect(() => saveSet(STORAGE_KEYS.liked, liked), [liked]);
   useEffect(() => saveSet(STORAGE_KEYS.saved, saved), [saved]);
   useEffect(() => saveSet(STORAGE_KEYS.viewed, viewed), [viewed]);
+  useEffect(() => saveJSON(STORAGE_KEYS.sources, selectedSourceIds), [selectedSourceIds]);
 
-  const loadForSource = useCallback(async (sourceId) => {
+  const loadForSources = useCallback(async (ids) => {
     setStatus('loading');
     setQuotes([]);
     try {
-      const batch = await fetchBatch(INITIAL_BATCH, [], sourceId);
+      const batch = await fetchBatch(INITIAL_BATCH, [], ids);
       if (batch.length === 0) throw new Error('No quotes returned');
       setQuotes(batch);
       setStatus('ready');
@@ -548,8 +563,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadForSource(activeSourceId);
-  }, [activeSourceId, loadForSource]);
+    loadForSources(selectedSourceIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey]);
 
   const showToast = useCallback((message) => {
     setToast({ show: true, message });
@@ -561,7 +577,7 @@ export default function App() {
     loadingMoreRef.current = true;
     setLoadingMore(true);
     setQuotes((current) => {
-      fetchBatch(LOAD_MORE_BATCH, current.map((q) => q.text), activeSourceId)
+      fetchBatch(LOAD_MORE_BATCH, current.map((q) => q.text), selectedSourceIds)
         .then((fresh) => {
           if (fresh.length) setQuotes((prev) => [...prev, ...fresh]);
         })
@@ -571,7 +587,7 @@ export default function App() {
         });
       return current;
     });
-  }, [activeSourceId]);
+  }, [selectedSourceIds]);
 
   const handleLike = useCallback(
     (id) => {
@@ -631,10 +647,22 @@ export default function App() {
     });
   }, []);
 
-  const handleSelectSource = useCallback((sourceId) => {
-    setActiveSourceId(sourceId);
-    setActiveTab('feed');
-  }, []);
+  const handleToggleSource = useCallback(
+    (id) => {
+      setSelectedSourceIds((prev) => {
+        const has = prev.includes(id);
+        if (has) {
+          if (prev.length === 1) {
+            showToast('Keep at least one category selected');
+            return prev;
+          }
+          return prev.filter((s) => s !== id);
+        }
+        return [...prev, id];
+      });
+    },
+    [showToast]
+  );
 
   const sourceBreakdown = useMemo(() => {
     return QUOTE_SOURCES.map((source) => ({
@@ -652,7 +680,7 @@ export default function App() {
 
       {activeTab === 'feed' && status === 'loading' && <FeedLoading />}
       {activeTab === 'feed' && status === 'error' && (
-        <FeedError onRetry={() => loadForSource(activeSourceId)} />
+        <FeedError onRetry={() => loadForSources(selectedSourceIds)} />
       )}
       {activeTab === 'feed' && status === 'ready' && (
         <FeedView
@@ -664,13 +692,13 @@ export default function App() {
           onShare={handleShare}
           onViewed={handleViewed}
           onReachEnd={handleReachEnd}
-          activeSourceId={activeSourceId}
-          onResetToDefault={() => setActiveSourceId(DEFAULT_SOURCE_ID)}
+          selectedCount={selectedSourceIds.length}
+          onOpenCategories={() => setActiveTab('categories')}
         />
       )}
 
       {activeTab === 'categories' && (
-        <CategoriesView activeSourceId={activeSourceId} onSelectSource={handleSelectSource} />
+        <CategoriesView selectedIds={selectedSourceIds} onToggleSource={handleToggleSource} />
       )}
 
       {activeTab === 'insights' && (
@@ -684,7 +712,7 @@ export default function App() {
       )}
 
       {loadingMore && (
-        <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-white/80 backdrop-blur-md px-4 py-2 rounded-full shadow-md">
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-white/80 backdrop-blur-md px-4 py-2 rounded-full shadow-md">
           <Loader2 size={14} className="animate-spin-slow text-violet-500" />
           <span className="text-xs font-bold text-neutral-700">Loading more…</span>
         </div>
