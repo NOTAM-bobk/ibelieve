@@ -4,7 +4,7 @@ import {
   Bookmark,
   Share2,
   Home,
-  Tag,
+  Shapes,
   Gift,
   Flame,
   Sparkles,
@@ -15,131 +15,23 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import AccountView from './AccountView.jsx';
-
-/* ------------------------------------------------------------------ */
-/* Category theming (visual only — no affirmation content is hard-    */
-/* coded here, this is purely styling metadata used to color/organize */
-/* whatever real affirmations come back from the APIs).                */
-/* ------------------------------------------------------------------ */
-
-const CATEGORIES = [
-  {
-    id: 'self-love',
-    name: 'Self Love',
-    emoji: '💖',
-    gradient: 'from-pink-200 via-rose-200 to-fuchsia-200',
-    text: 'text-rose-950',
-    chip: 'bg-rose-500',
-    keywords: ['love', 'worthy', 'myself', 'kind', 'care', 'body', 'deserve'],
-  },
-  {
-    id: 'success',
-    name: 'Success',
-    emoji: '🚀',
-    gradient: 'from-amber-200 via-yellow-100 to-orange-200',
-    text: 'text-amber-950',
-    chip: 'bg-amber-500',
-    keywords: ['success', 'goal', 'achieve', 'opportunit', 'build', 'accomplish', 'earn'],
-  },
-  {
-    id: 'anxiety',
-    name: 'Calm & Anxiety',
-    emoji: '🌊',
-    gradient: 'from-sky-200 via-cyan-100 to-blue-200',
-    text: 'text-sky-950',
-    chip: 'bg-sky-500',
-    keywords: ['calm', 'breathe', 'safe', 'peace', 'ease', 'relax', 'quiet'],
-  },
-  {
-    id: 'gratitude',
-    name: 'Gratitude',
-    emoji: '🙏',
-    gradient: 'from-emerald-200 via-green-100 to-teal-200',
-    text: 'text-emerald-950',
-    chip: 'bg-emerald-500',
-    keywords: ['grateful', 'gratitude', 'thank', 'appreciat', 'bless', 'joy'],
-  },
-  {
-    id: 'confidence',
-    name: 'Confidence',
-    emoji: '⚡',
-    gradient: 'from-violet-200 via-purple-100 to-indigo-200',
-    text: 'text-violet-950',
-    chip: 'bg-violet-500',
-    keywords: ['confiden', 'strong', 'capable', 'brave', 'power', 'trust'],
-  },
-  {
-    id: 'motivation',
-    name: 'Motivation',
-    emoji: '🔥',
-    gradient: 'from-red-200 via-orange-100 to-rose-200',
-    text: 'text-red-950',
-    chip: 'bg-red-500',
-    keywords: ['motivat', 'energy', 'today', 'progress', 'forward', 'action', 'grow'],
-  },
-];
-
-const categoryById = (id) => CATEGORIES.find((c) => c.id === id) || CATEGORIES[0];
-
-/**
- * Neither public affirmation API returns a category, so we tag each
- * real affirmation with a lightweight keyword guess. If nothing
- * matches, fall back to a deterministic hash so the distribution
- * across categories stays reasonably even (not literally random junk
- * data — same text always lands in the same bucket).
- */
-function guessCategory(text) {
-  const lower = text.toLowerCase();
-  for (const cat of CATEGORIES) {
-    if (cat.keywords.some((w) => lower.includes(w))) return cat.id;
-  }
-  let hash = 0;
-  for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
-  return CATEGORIES[hash % CATEGORIES.length].id;
-}
+import CategoriesView from './CategoriesView.jsx';
+import { QUOTE_SOURCES, sourceById } from './quoteSources.js';
 
 let idCounter = 1;
 const nextId = () => idCounter++;
 
-/* ------------------------------------------------------------------ */
-/* Live API sources — the app alternates between both on every fetch   */
-/* ------------------------------------------------------------------ */
-
-const AFFIRMATION_SOURCES = [
-  {
-    name: 'affirmations.dev',
-    url: 'https://www.affirmations.dev/',
-    parse: (data) => (typeof data === 'string' ? data : data?.affirmation),
-  },
-  {
-    name: 'woof-affirmations-api',
-    url: 'https://woof-affirmations-api.vercel.app/api/affirmation',
-    parse: (data) =>
-      typeof data === 'string' ? data : data?.affirmation || data?.message || data?.text || data?.data,
-  },
-];
-
-async function fetchOneAffirmation() {
-  // Randomly pick a source each call so requests switch between APIs
-  const source = AFFIRMATION_SOURCES[Math.floor(Math.random() * AFFIRMATION_SOURCES.length)];
-  const res = await fetch(source.url, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`${source.name} responded ${res.status}`);
-  const data = await res.json();
-  const text = source.parse(data);
-  if (!text || typeof text !== 'string') throw new Error(`Unexpected payload from ${source.name}`);
-  return text.trim();
-}
-
-async function fetchBatch(count, existingTexts) {
+async function fetchBatch(count, existingTexts, sourceId) {
+  const source = sourceById(sourceId);
   const seen = new Set(existingTexts);
   const results = await Promise.allSettled(
-    Array.from({ length: count }, () => fetchOneAffirmation())
+    Array.from({ length: count }, () => source.fetchOne())
   );
   const fresh = [];
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value && !seen.has(r.value)) {
       seen.add(r.value);
-      fresh.push({ id: nextId(), text: r.value, categoryId: guessCategory(r.value) });
+      fresh.push({ id: nextId(), text: r.value, sourceId: source.id });
     }
   }
   return fresh;
@@ -150,18 +42,16 @@ async function fetchBatch(count, existingTexts) {
 /* ------------------------------------------------------------------ */
 
 const STORAGE_KEYS = {
-  liked: 'affirm.liked.v1',
-  saved: 'affirm.saved.v1',
-  viewed: 'affirm.viewed.v1',
-  visits: 'affirm.visits.v1',
-  likedCats: 'affirm.likedCats.v1',
+  liked: 'ibelieve.liked.v1',
+  saved: 'ibelieve.saved.v1',
+  viewed: 'ibelieve.viewed.v1',
+  visits: 'ibelieve.visits.v1',
 };
 
 function loadSet(key) {
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) return new Set();
-    return new Set(JSON.parse(raw));
+    return raw ? new Set(JSON.parse(raw)) : new Set();
   } catch {
     return new Set();
   }
@@ -233,7 +123,7 @@ function Toast({ message, show }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Top bar (account button)                                            */
+/* Top bar (app name + account button)                                  */
 /* ------------------------------------------------------------------ */
 
 function TopBar({ onOpenAccount }) {
@@ -242,7 +132,7 @@ function TopBar({ onOpenAccount }) {
       <div className="flex items-center justify-between px-5 pt-4">
         <div className="flex items-center gap-1.5 bg-white/40 backdrop-blur-md px-3 py-1.5 rounded-full pointer-events-auto">
           <Sparkles size={14} className="text-neutral-700" />
-          <span className="text-xs font-bold text-neutral-800">Daily Affirmations</span>
+          <span className="text-xs font-bold text-neutral-800">ibelieve</span>
         </div>
         <button
           onClick={onOpenAccount}
@@ -257,27 +147,27 @@ function TopBar({ onOpenAccount }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Feed Card                                                            */
+/* Feed Card — now a squarer tile centered on each snap section         */
 /* ------------------------------------------------------------------ */
 
-function FeedCard({ affirmation, isLiked, isSaved, onLike, onSave, onShare, registerRef, isLast }) {
-  const cat = categoryById(affirmation.categoryId);
+function FeedCard({ quote, isLiked, isSaved, onLike, onSave, onShare, registerRef, isLast }) {
+  const source = sourceById(quote.sourceId);
   const cardRef = useRef(null);
   const [heartPop, setHeartPop] = useState(false);
   const [saveBounce, setSaveBounce] = useState(false);
 
   useEffect(() => {
-    if (cardRef.current) registerRef(affirmation.id, cardRef.current, isLast);
-  }, [affirmation.id, registerRef, isLast]);
+    if (cardRef.current) registerRef(quote.id, cardRef.current, isLast);
+  }, [quote.id, registerRef, isLast]);
 
   const handleLike = () => {
-    onLike(affirmation.id);
+    onLike(quote.id);
     setHeartPop(true);
     setTimeout(() => setHeartPop(false), 400);
   };
 
   const handleSave = () => {
-    onSave(affirmation.id);
+    onSave(quote.id);
     setSaveBounce(true);
     setTimeout(() => setSaveBounce(false), 400);
   };
@@ -285,74 +175,69 @@ function FeedCard({ affirmation, isLiked, isSaved, onLike, onSave, onShare, regi
   return (
     <section
       ref={cardRef}
-      data-id={affirmation.id}
-      className={`relative h-[100dvh] w-full snap-start snap-always flex items-center justify-center overflow-hidden bg-gradient-to-br ${cat.gradient}`}
+      data-id={quote.id}
+      className="relative h-[100dvh] w-full snap-start snap-always flex items-center justify-center bg-neutral-100 px-5"
     >
-      {/* decorative soft blobs */}
-      <div className="absolute -top-20 -left-16 w-72 h-72 bg-white/30 rounded-full blur-3xl" />
-      <div className="absolute -bottom-24 -right-10 w-80 h-80 bg-white/20 rounded-full blur-3xl" />
-
-      {/* category chip */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 animate-float-in">
-        <span
-          className={`${cat.chip} text-white text-xs font-bold px-4 py-1.5 rounded-full shadow-md flex items-center gap-1.5`}
-        >
-          <span>{cat.emoji}</span>
-          {cat.name}
-        </span>
-      </div>
-
-      {/* main text — generous side padding so it never collides with the action buttons */}
       <div
-        key={affirmation.id}
-        className="relative px-10 sm:px-14 max-w-[80%] sm:max-w-md text-center animate-float-in"
+        className={`relative w-full max-w-sm aspect-square rounded-[40px] shadow-xl overflow-hidden flex flex-col items-center justify-center p-8 bg-gradient-to-br ${source.gradient}`}
       >
-        <p className={`text-3xl sm:text-4xl font-bold leading-snug ${cat.text}`}>
-          {affirmation.text}
-        </p>
-      </div>
+        {/* decorative soft blobs */}
+        <div className="absolute -top-16 -left-12 w-56 h-56 bg-white/30 rounded-full blur-3xl" />
+        <div className="absolute -bottom-16 -right-8 w-56 h-56 bg-white/20 rounded-full blur-3xl" />
 
-      {/* floating action buttons — smaller, tucked to the edge, well clear of the text */}
-      <div className="absolute right-3 bottom-40 flex flex-col items-center gap-5">
-        <button onClick={handleLike} className="flex flex-col items-center gap-1 group">
-          <div
-            className={`w-11 h-11 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md transition-all duration-200 active:scale-90 ${
-              isLiked ? 'bg-rose-500' : 'bg-white/40 group-hover:bg-white/60'
-            } ${heartPop ? 'animate-pop' : ''}`}
+        {/* category chip */}
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 animate-float-in">
+          <span
+            className={`${source.chip} text-white text-xs font-bold px-4 py-1.5 rounded-full shadow-md flex items-center gap-1.5`}
           >
-            <Heart
-              size={20}
-              className={isLiked ? 'text-white fill-white' : cat.text}
-              strokeWidth={2.2}
-            />
-          </div>
-          <span className={`text-[10px] font-bold ${cat.text}`}>Like</span>
-        </button>
+            <span>{source.emoji}</span>
+            {source.name}
+          </span>
+        </div>
 
-        <button onClick={handleSave} className="flex flex-col items-center gap-1 group">
-          <div
-            className={`w-11 h-11 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md transition-all duration-200 active:scale-90 ${
-              isSaved ? 'bg-indigo-500' : 'bg-white/40 group-hover:bg-white/60'
-            } ${saveBounce ? 'animate-pop' : ''}`}
-          >
-            <Bookmark
-              size={18}
-              className={isSaved ? 'text-white fill-white' : cat.text}
-              strokeWidth={2.2}
-            />
-          </div>
-          <span className={`text-[10px] font-bold ${cat.text}`}>Save</span>
-        </button>
+        {/* main text */}
+        <div key={quote.id} className="relative px-4 text-center animate-float-in">
+          <p className={`text-2xl sm:text-3xl font-bold leading-snug ${source.text}`}>
+            {quote.text}
+          </p>
+        </div>
 
-        <button
-          onClick={() => onShare(affirmation.text)}
-          className="flex flex-col items-center gap-1 group"
-        >
-          <div className="w-11 h-11 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md bg-white/40 group-hover:bg-white/60 transition-all duration-200 active:scale-90">
-            <Share2 size={18} className={cat.text} strokeWidth={2.2} />
-          </div>
-          <span className={`text-[10px] font-bold ${cat.text}`}>Share</span>
-        </button>
+        {/* floating action buttons — tucked inside the card, clear of the text */}
+        <div className="absolute right-4 bottom-4 flex flex-col items-center gap-3">
+          <button onClick={handleLike} className="flex flex-col items-center gap-1 group">
+            <div
+              className={`w-10 h-10 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md transition-all duration-200 active:scale-90 ${
+                isLiked ? 'bg-rose-500' : 'bg-white/40 group-hover:bg-white/60'
+              } ${heartPop ? 'animate-pop' : ''}`}
+            >
+              <Heart
+                size={18}
+                className={isLiked ? 'text-white fill-white' : source.text}
+                strokeWidth={2.2}
+              />
+            </div>
+          </button>
+
+          <button onClick={handleSave} className="flex flex-col items-center gap-1 group">
+            <div
+              className={`w-10 h-10 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md transition-all duration-200 active:scale-90 ${
+                isSaved ? 'bg-indigo-500' : 'bg-white/40 group-hover:bg-white/60'
+              } ${saveBounce ? 'animate-pop' : ''}`}
+            >
+              <Bookmark
+                size={16}
+                className={isSaved ? 'text-white fill-white' : source.text}
+                strokeWidth={2.2}
+              />
+            </div>
+          </button>
+
+          <button onClick={() => onShare(quote.text)} className="flex flex-col items-center gap-1 group">
+            <div className="w-10 h-10 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-md bg-white/40 group-hover:bg-white/60 transition-all duration-200 active:scale-90">
+              <Share2 size={16} className={source.text} strokeWidth={2.2} />
+            </div>
+          </button>
+        </div>
       </div>
     </section>
   );
@@ -366,7 +251,7 @@ function FeedLoading() {
   return (
     <div className="h-[100dvh] flex flex-col items-center justify-center bg-gradient-to-br from-violet-100 via-purple-50 to-fuchsia-100 px-8 text-center gap-4">
       <Loader2 size={34} className="text-violet-500 animate-spin-slow" />
-      <p className="text-violet-900/70 font-semibold">Fetching today's affirmations…</p>
+      <p className="text-violet-900/70 font-semibold">Fetching fresh quotes…</p>
     </div>
   );
 }
@@ -377,7 +262,7 @@ function FeedError({ onRetry }) {
       <div className="w-16 h-16 rounded-3xl bg-rose-100 flex items-center justify-center">
         <X size={28} className="text-rose-500" />
       </div>
-      <p className="text-neutral-600 font-semibold">Couldn't reach the affirmation APIs.</p>
+      <p className="text-neutral-600 font-semibold">Couldn't reach that API.</p>
       <button
         onClick={onRetry}
         className="flex items-center gap-2 bg-neutral-900 text-white font-semibold px-5 py-2.5 rounded-full active:scale-95 transition-transform"
@@ -394,7 +279,7 @@ function FeedError({ onRetry }) {
 /* ------------------------------------------------------------------ */
 
 function FeedView({
-  affirmations,
+  quotes,
   liked,
   saved,
   onLike,
@@ -402,8 +287,8 @@ function FeedView({
   onShare,
   onViewed,
   onReachEnd,
-  activeCategory,
-  onClearFilter,
+  activeSourceId,
+  onResetToDefault,
 }) {
   const cardRefs = useRef(new Map());
 
@@ -424,12 +309,11 @@ function FeedView({
     );
     cardRefs.current.forEach((el) => viewObserver.observe(el));
     return () => viewObserver.disconnect();
-  }, [affirmations, onViewed]);
+  }, [quotes, onViewed]);
 
-  // Trigger infinite-load when the last card scrolls into view
   useEffect(() => {
-    if (activeCategory || affirmations.length === 0) return;
-    const lastId = affirmations[affirmations.length - 1]?.id;
+    if (quotes.length === 0) return;
+    const lastId = quotes[quotes.length - 1]?.id;
     const el = cardRefs.current.get(lastId);
     if (!el) return;
     const endObserver = new IntersectionObserver(
@@ -442,74 +326,33 @@ function FeedView({
     );
     endObserver.observe(el);
     return () => endObserver.disconnect();
-  }, [affirmations, activeCategory, onReachEnd]);
+  }, [quotes, onReachEnd]);
 
-  if (affirmations.length === 0) {
-    return (
-      <div className="h-[100dvh] flex flex-col items-center justify-center bg-neutral-100 px-8 text-center gap-4">
-        <Sparkles className="text-neutral-400" size={40} />
-        <p className="text-neutral-500 font-semibold">No affirmations in this category yet.</p>
-      </div>
-    );
-  }
+  const isDefault = activeSourceId === QUOTE_SOURCES[0].id;
 
   return (
     <div className="relative h-[100dvh] w-full">
-      {activeCategory && (
+      {!isDefault && (
         <button
-          onClick={onClearFilter}
+          onClick={onResetToDefault}
           className="absolute top-20 left-4 z-20 flex items-center gap-1.5 bg-white/70 backdrop-blur-md text-neutral-800 text-xs font-bold pl-2 pr-3 py-1.5 rounded-full shadow-md active:scale-95 transition-transform"
         >
-          <X size={14} /> Clear filter
+          <X size={14} /> Back to {QUOTE_SOURCES[0].name}
         </button>
       )}
       <div className="h-full w-full overflow-y-scroll snap-y snap-mandatory">
-        {affirmations.map((a, i) => (
+        {quotes.map((q, i) => (
           <FeedCard
-            key={a.id}
-            affirmation={a}
-            isLiked={liked.has(a.id)}
-            isSaved={saved.has(a.id)}
+            key={q.id}
+            quote={q}
+            isLiked={liked.has(q.id)}
+            isSaved={saved.has(q.id)}
             onLike={onLike}
             onSave={onSave}
             onShare={onShare}
             registerRef={registerRef}
-            isLast={i === affirmations.length - 1}
+            isLast={i === quotes.length - 1}
           />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Explore View                                                         */
-/* ------------------------------------------------------------------ */
-
-function ExploreView({ onSelectCategory, counts }) {
-  return (
-    <div className="h-[100dvh] w-full overflow-y-auto bg-neutral-50 pb-32">
-      <div className="px-6 pt-safe pt-24 pb-6">
-        <h1 className="text-3xl font-extrabold text-neutral-900">Explore</h1>
-        <p className="text-neutral-500 mt-1 font-medium">Pick a mood to focus your feed on.</p>
-      </div>
-      <div className="grid grid-cols-2 gap-4 px-6">
-        {CATEGORIES.map((cat, i) => (
-          <button
-            key={cat.id}
-            onClick={() => onSelectCategory(cat.id)}
-            style={{ animationDelay: `${i * 60}ms` }}
-            className={`animate-float-in relative overflow-hidden rounded-[28px] p-5 h-40 flex flex-col justify-between text-left shadow-sm active:scale-95 transition-transform bg-gradient-to-br ${cat.gradient}`}
-          >
-            <div className="absolute -bottom-6 -right-6 w-24 h-24 bg-white/25 rounded-full blur-xl" />
-            <span className="text-3xl relative">{cat.emoji}</span>
-            <div className="relative">
-              <p className={`font-bold text-lg ${cat.text}`}>{cat.name}</p>
-              <p className={`text-xs font-semibold opacity-70 ${cat.text}`}>
-                {counts[cat.id] || 0} loaded
-              </p>
-            </div>
-          </button>
         ))}
       </div>
     </div>
@@ -520,8 +363,8 @@ function ExploreView({ onSelectCategory, counts }) {
 /* Insights View                                                        */
 /* ------------------------------------------------------------------ */
 
-function InsightsView({ viewedCount, likedCount, savedCount, streak, categoryBreakdown }) {
-  const maxCount = Math.max(1, ...categoryBreakdown.map((c) => c.count));
+function InsightsView({ viewedCount, likedCount, savedCount, streak, sourceBreakdown }) {
+  const maxCount = Math.max(1, ...sourceBreakdown.map((c) => c.count));
 
   return (
     <div className="h-[100dvh] w-full overflow-y-auto bg-neutral-50 pb-32">
@@ -532,7 +375,6 @@ function InsightsView({ viewedCount, likedCount, savedCount, streak, categoryBre
         </p>
       </div>
 
-      {/* Streak card */}
       <div className="mx-6 rounded-[28px] bg-gradient-to-br from-orange-300 via-amber-200 to-yellow-200 p-6 shadow-sm flex items-center justify-between animate-float-in">
         <div>
           <p className="text-amber-900/70 font-bold text-sm">Current Streak</p>
@@ -546,7 +388,6 @@ function InsightsView({ viewedCount, likedCount, savedCount, streak, categoryBre
         </div>
       </div>
 
-      {/* Stats row */}
       <div className="grid grid-cols-3 gap-3 mx-6 mt-4">
         <div className="rounded-[24px] bg-white p-4 shadow-sm text-center animate-float-in">
           <p className="text-2xl font-extrabold text-neutral-900">{viewedCount}</p>
@@ -568,28 +409,27 @@ function InsightsView({ viewedCount, likedCount, savedCount, streak, categoryBre
         </div>
       </div>
 
-      {/* Category breakdown, based on what's actually been liked */}
       <div className="mx-6 mt-6 rounded-[28px] bg-white p-6 shadow-sm animate-float-in">
         <p className="font-bold text-neutral-900 mb-4">Top Categories</p>
-        {categoryBreakdown.length === 0 ? (
+        {sourceBreakdown.length === 0 ? (
           <p className="text-sm text-neutral-400 font-medium">
-            Like a few affirmations to see your top moods here.
+            Like a few quotes to see your favorite categories here.
           </p>
         ) : (
           <div className="flex flex-col gap-4">
-            {categoryBreakdown.map((c) => {
-              const cat = categoryById(c.id);
+            {sourceBreakdown.map((c) => {
+              const source = sourceById(c.id);
               return (
                 <div key={c.id}>
                   <div className="flex justify-between text-sm font-semibold mb-1.5">
                     <span className="text-neutral-700">
-                      {cat.emoji} {cat.name}
+                      {source.emoji} {source.name}
                     </span>
                     <span className="text-neutral-400">{c.count}</span>
                   </div>
                   <div className="h-2.5 w-full bg-neutral-100 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full ${cat.chip} transition-all duration-700`}
+                      className={`h-full rounded-full ${source.chip} transition-all duration-700`}
                       style={{ width: `${(c.count / maxCount) * 100}%` }}
                     />
                   </div>
@@ -604,14 +444,14 @@ function InsightsView({ viewedCount, likedCount, savedCount, streak, categoryBre
 }
 
 /* ------------------------------------------------------------------ */
-/* Bottom Navigation — image-referenced style                          */
+/* Bottom Navigation — Material 3 Expressive styling                    */
 /* ------------------------------------------------------------------ */
 
 function BottomNav({ activeTab, setActiveTab }) {
   const items = [
-    { id: 'feed', label: 'Dashboard', icon: Home },
-    { id: 'explore', label: 'Offers', icon: Tag },
-    { id: 'insights', label: 'Rewards', icon: Gift },
+    { id: 'feed', label: 'Feed', icon: Home },
+    { id: 'categories', label: 'Categories', icon: Shapes },
+    { id: 'insights', label: 'Insights', icon: Gift },
   ];
 
   return (
@@ -662,15 +502,16 @@ function BottomNav({ activeTab, setActiveTab }) {
 /* App Root                                                             */
 /* ------------------------------------------------------------------ */
 
-const INITIAL_BATCH = 12;
+const INITIAL_BATCH = 10;
 const LOAD_MORE_BATCH = 6;
+const DEFAULT_SOURCE_ID = QUOTE_SOURCES[0].id;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('feed');
-  const [affirmations, setAffirmations] = useState([]);
+  const [activeSourceId, setActiveSourceId] = useState(DEFAULT_SOURCE_ID);
+  const [quotes, setQuotes] = useState([]);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [loadingMore, setLoadingMore] = useState(false);
-  const [activeCategory, setActiveCategory] = useState(null);
   const [showAccount, setShowAccount] = useState(false);
 
   const [liked, setLiked] = useState(() => loadSet(STORAGE_KEYS.liked));
@@ -681,7 +522,6 @@ export default function App() {
 
   const loadingMoreRef = useRef(false);
 
-  // Record today's visit + compute streak once on mount
   useEffect(() => {
     const visits = loadJSON(STORAGE_KEYS.visits, []);
     const key = todayKey();
@@ -690,17 +530,17 @@ export default function App() {
     setStreak(computeStreak(visits));
   }, []);
 
-  // Persist interaction sets whenever they change
   useEffect(() => saveSet(STORAGE_KEYS.liked, liked), [liked]);
   useEffect(() => saveSet(STORAGE_KEYS.saved, saved), [saved]);
   useEffect(() => saveSet(STORAGE_KEYS.viewed, viewed), [viewed]);
 
-  const loadInitial = useCallback(async () => {
+  const loadForSource = useCallback(async (sourceId) => {
     setStatus('loading');
+    setQuotes([]);
     try {
-      const batch = await fetchBatch(INITIAL_BATCH, []);
-      if (batch.length === 0) throw new Error('No affirmations returned');
-      setAffirmations(batch);
+      const batch = await fetchBatch(INITIAL_BATCH, [], sourceId);
+      if (batch.length === 0) throw new Error('No quotes returned');
+      setQuotes(batch);
       setStatus('ready');
     } catch {
       setStatus('error');
@@ -708,8 +548,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadInitial();
-  }, [loadInitial]);
+    loadForSource(activeSourceId);
+  }, [activeSourceId, loadForSource]);
 
   const showToast = useCallback((message) => {
     setToast({ show: true, message });
@@ -720,10 +560,10 @@ export default function App() {
     if (loadingMoreRef.current) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
-    setAffirmations((current) => {
-      fetchBatch(LOAD_MORE_BATCH, current.map((a) => a.text))
+    setQuotes((current) => {
+      fetchBatch(LOAD_MORE_BATCH, current.map((q) => q.text), activeSourceId)
         .then((fresh) => {
-          if (fresh.length) setAffirmations((prev) => [...prev, ...fresh]);
+          if (fresh.length) setQuotes((prev) => [...prev, ...fresh]);
         })
         .finally(() => {
           loadingMoreRef.current = false;
@@ -731,7 +571,7 @@ export default function App() {
         });
       return current;
     });
-  }, []);
+  }, [activeSourceId]);
 
   const handleLike = useCallback(
     (id) => {
@@ -767,7 +607,7 @@ export default function App() {
 
   const handleShare = useCallback(
     async (text) => {
-      const shareData = { title: 'Daily Affirmation', text };
+      const shareData = { title: 'ibelieve', text };
       try {
         if (navigator.share) {
           await navigator.share(shareData);
@@ -791,30 +631,19 @@ export default function App() {
     });
   }, []);
 
-  const handleSelectCategory = useCallback((catId) => {
-    setActiveCategory(catId);
+  const handleSelectSource = useCallback((sourceId) => {
+    setActiveSourceId(sourceId);
     setActiveTab('feed');
   }, []);
 
-  const displayedAffirmations = activeCategory
-    ? affirmations.filter((a) => a.categoryId === activeCategory)
-    : affirmations;
-
-  const categoryCounts = useMemo(() => {
-    return CATEGORIES.reduce((acc, cat) => {
-      acc[cat.id] = affirmations.filter((a) => a.categoryId === cat.id).length;
-      return acc;
-    }, {});
-  }, [affirmations]);
-
-  const categoryBreakdown = useMemo(() => {
-    return CATEGORIES.map((cat) => ({
-      id: cat.id,
-      count: affirmations.filter((a) => liked.has(a.id) && a.categoryId === cat.id).length,
+  const sourceBreakdown = useMemo(() => {
+    return QUOTE_SOURCES.map((source) => ({
+      id: source.id,
+      count: quotes.filter((q) => liked.has(q.id) && q.sourceId === source.id).length,
     }))
       .filter((c) => c.count > 0)
       .sort((a, b) => b.count - a.count);
-  }, [affirmations, liked]);
+  }, [quotes, liked]);
 
   return (
     <div className="relative w-full h-[100dvh] bg-neutral-100 overflow-hidden">
@@ -822,10 +651,12 @@ export default function App() {
       <TopBar onOpenAccount={() => setShowAccount(true)} />
 
       {activeTab === 'feed' && status === 'loading' && <FeedLoading />}
-      {activeTab === 'feed' && status === 'error' && <FeedError onRetry={loadInitial} />}
+      {activeTab === 'feed' && status === 'error' && (
+        <FeedError onRetry={() => loadForSource(activeSourceId)} />
+      )}
       {activeTab === 'feed' && status === 'ready' && (
         <FeedView
-          affirmations={displayedAffirmations}
+          quotes={quotes}
           liked={liked}
           saved={saved}
           onLike={handleLike}
@@ -833,13 +664,13 @@ export default function App() {
           onShare={handleShare}
           onViewed={handleViewed}
           onReachEnd={handleReachEnd}
-          activeCategory={activeCategory}
-          onClearFilter={() => setActiveCategory(null)}
+          activeSourceId={activeSourceId}
+          onResetToDefault={() => setActiveSourceId(DEFAULT_SOURCE_ID)}
         />
       )}
 
-      {activeTab === 'explore' && (
-        <ExploreView onSelectCategory={handleSelectCategory} counts={categoryCounts} />
+      {activeTab === 'categories' && (
+        <CategoriesView activeSourceId={activeSourceId} onSelectSource={handleSelectSource} />
       )}
 
       {activeTab === 'insights' && (
@@ -848,7 +679,7 @@ export default function App() {
           likedCount={liked.size}
           savedCount={saved.size}
           streak={streak}
-          categoryBreakdown={categoryBreakdown}
+          sourceBreakdown={sourceBreakdown}
         />
       )}
 
